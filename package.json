@@ -1,0 +1,36 @@
+{
+  "name": "pi-code-quiz",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "quiz",
+    "learning",
+    "code-understanding"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.59.0",
+    "@mariozechner/pi-coding-agent": "^0.59.0",
+    "@mariozechner/pi-tui": "^0.59.0",
+    "@types/node": "^24.3.0",
+    "typescript": "^5.7.3"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
