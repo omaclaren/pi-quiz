@@ -6,7 +6,7 @@ import {
 	type ExtensionCommandContext,
 	type Theme,
 } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, matchesKey, Text } from "@mariozechner/pi-tui";
+import { Container, Markdown, matchesKey, Text, visibleWidth } from "@mariozechner/pi-tui";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -119,6 +119,19 @@ const CODE_PREVIEW_BLOCK_LINES = 18;
 const CODE_PREVIEW_TAIL_LINES = 24;
 const CODE_PREVIEW_MAX_BLOCKS = 4;
 const SEGMENT_MERGE_GAP = 2;
+const QUIZ_OVERLAY_OPTIONS = {
+	anchor: "right-center" as const,
+	width: "48%" as const,
+	minWidth: 56,
+	maxHeight: "88%" as const,
+	margin: { top: 1, right: 1, bottom: 1 },
+};
+const QUIZ_LOADER_OVERLAY_OPTIONS = {
+	anchor: "top-center" as const,
+	width: 68,
+	maxHeight: 7,
+	margin: { top: 1 },
+};
 
 const LENS_VALUES = new Set<Lens>(["abstraction", "usage", "mechanism", "assumption", "change", "debugging"]);
 const DEPTH_VALUES = new Set<Depth>(["foundational", "intermediate", "subtle", "transfer"]);
@@ -1134,7 +1147,15 @@ class QuizCardPanel {
 	}
 
 	render(width: number): string[] {
-		return this.container.render(width);
+		const contentWidth = Math.max(20, width - 4);
+		const borderColor = (s: string) => this.theme.fg("border", s);
+		const innerLines = this.container.render(contentWidth);
+		const padLine = (line: string) => line + " ".repeat(Math.max(0, contentWidth - visibleWidth(line)));
+		return [
+			borderColor(`╭${"─".repeat(Math.max(0, contentWidth + 2))}╮`),
+			...innerLines.map((line) => `${borderColor("│")} ${padLine(line)} ${borderColor("│")}`),
+			borderColor(`╰${"─".repeat(Math.max(0, contentWidth + 2))}╯`),
+		];
 	}
 
 	invalidate(): void {
@@ -1167,16 +1188,18 @@ async function showQuestionStage(
 	card: QuizCard,
 	index: number,
 ): Promise<{ action: QuestionStageAction; viewedHint: boolean }> {
-	return ctx.ui.custom<{ action: QuestionStageAction; viewedHint: boolean }>((_, theme, __, done) =>
-		new QuizCardPanel(
-			theme,
-			packet.scope.label,
-			card,
-			index,
-			packet.cards.length,
-			"question",
-			(result) => done({ action: result.action as QuestionStageAction, viewedHint: Boolean(result.viewedHint) }),
-		),
+	return ctx.ui.custom<{ action: QuestionStageAction; viewedHint: boolean }>(
+		(_, theme, __, done) =>
+			new QuizCardPanel(
+				theme,
+				packet.scope.label,
+				card,
+				index,
+				packet.cards.length,
+				"question",
+				(result) => done({ action: result.action as QuestionStageAction, viewedHint: Boolean(result.viewedHint) }),
+			),
+		{ overlay: true, overlayOptions: QUIZ_OVERLAY_OPTIONS },
 	);
 }
 
@@ -1187,17 +1210,19 @@ async function showRevealStage(
 	index: number,
 	userAnswer?: string,
 ): Promise<{ action: RevealStageAction }> {
-	return ctx.ui.custom<{ action: RevealStageAction }>((_, theme, __, done) =>
-		new QuizCardPanel(
-			theme,
-			packet.scope.label,
-			card,
-			index,
-			packet.cards.length,
-			"reveal",
-			(result) => done({ action: result.action as RevealStageAction }),
-			userAnswer,
-		),
+	return ctx.ui.custom<{ action: RevealStageAction }>(
+		(_, theme, __, done) =>
+			new QuizCardPanel(
+				theme,
+				packet.scope.label,
+				card,
+				index,
+				packet.cards.length,
+				"reveal",
+				(result) => done({ action: result.action as RevealStageAction }),
+				userAnswer,
+			),
+		{ overlay: true, overlayOptions: QUIZ_OVERLAY_OPTIONS },
 	);
 }
 
@@ -1267,19 +1292,22 @@ export default function activeCodeTutor(pi: ExtensionAPI) {
 			}
 
 			let generationError: string | undefined;
-			const packet = await ctx.ui.custom<QuizPacket | null>((tui, theme, _kb, done) => {
-				const loader = new BorderedLoader(tui, theme, `Generating quiz with ${ctx.model!.id} for ${scope.label}...`);
-				loader.onAbort = () => done(null);
+			const packet = await ctx.ui.custom<QuizPacket | null>(
+				(tui, theme, _kb, done) => {
+					const loader = new BorderedLoader(tui, theme, `Generating quiz with ${ctx.model!.id} for ${scope.label}...`);
+					loader.onAbort = () => done(null);
 
-				generateQuizPacket(pi, ctx, scope, sources, loader.signal)
-					.then(done)
-					.catch((err) => {
-						generationError = err instanceof Error ? err.message : String(err);
-						done(null);
-					});
+					generateQuizPacket(pi, ctx, scope, sources, loader.signal)
+						.then(done)
+						.catch((err) => {
+							generationError = err instanceof Error ? err.message : String(err);
+							done(null);
+						});
 
-				return loader;
-			});
+					return loader;
+				},
+				{ overlay: true, overlayOptions: QUIZ_LOADER_OVERLAY_OPTIONS },
+			);
 
 			if (!packet) {
 				ctx.ui.notify(generationError || "Quiz generation cancelled", generationError ? "error" : "info");

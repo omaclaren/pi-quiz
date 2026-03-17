@@ -17,6 +17,7 @@ This package currently focuses on a small, low-overhead workflow:
 - scope is central: `workset`, `session`, `repo`, `file <path>`
 - uses the **active model** and **active thinking level** for quiz generation
 - stores generated quiz packets as **hidden session entries**
+- shows the quiz in an **overlay side panel** rather than replacing the main transcript
 - shows real snippets as evidence, but only in service of a question
 
 It is **not** trying to be an Anki clone or a full spaced-repetition framework yet.
