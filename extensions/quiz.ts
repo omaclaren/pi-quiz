@@ -104,6 +104,11 @@ const MAX_FILE_LINES = 220;
 const MAX_FILE_BYTES = 40_000;
 const MAX_REPO_TREE_FILES = 200;
 const CARD_COUNT = 4;
+const CODE_PREVIEW_HEAD_LINES = 60;
+const CODE_PREVIEW_BLOCK_LINES = 18;
+const CODE_PREVIEW_TAIL_LINES = 24;
+const CODE_PREVIEW_MAX_BLOCKS = 4;
+const SEGMENT_MERGE_GAP = 2;
 
 const LENS_VALUES = new Set<Lens>(["abstraction", "usage", "mechanism", "assumption", "change", "debugging"]);
 const DEPTH_VALUES = new Set<Depth>(["foundational", "intermediate", "subtle", "transfer"]);
@@ -222,6 +227,115 @@ function languageFromPath(path?: string): string | undefined {
 			".sql": "sql",
 		} as Record<string, string>
 	)[ext];
+}
+
+function stripLineNumberPrefix(line: string): string {
+	return line.replace(/^\s*\d+\s\|\s?/, "");
+}
+
+function stripLineNumberPrefixes(text: string): string {
+	return text
+		.split("\n")
+		.map((line) => stripLineNumberPrefix(line))
+		.join("\n");
+}
+
+function looksLikeDefinitionLine(line: string): boolean {
+	const trimmed = line.trim();
+	if (!trimmed) return false;
+	return [
+		/^(export\s+)?(async\s+)?function\b/,
+		/^(export\s+)?class\b/,
+		/^(export\s+)?interface\b/,
+		/^(export\s+)?type\b/,
+		/^(export\s+)?enum\b/,
+		/^(const|let|var)\s+\w+\s*=\s*(async\s*)?\(/,
+		/^def\b/,
+		/^class\b/,
+		/^function\b/,
+		/^\w+\s*(<-|=)\s*function\b/,
+		/^(struct|mutable struct|abstract type|module)\b/,
+	].some((pattern) => pattern.test(trimmed));
+}
+
+function mergeSegments(segments: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+	const sorted = [...segments].sort((a, b) => a.start - b.start || a.end - b.end);
+	const merged: Array<{ start: number; end: number }> = [];
+	for (const segment of sorted) {
+		const last = merged[merged.length - 1];
+		if (!last || segment.start > last.end + SEGMENT_MERGE_GAP) {
+			merged.push({ ...segment });
+		} else {
+			last.end = Math.max(last.end, segment.end);
+		}
+	}
+	return merged;
+}
+
+function renderLineSegments(lines: string[], segments: Array<{ start: number; end: number }>, maxLines: number): string {
+	const merged = mergeSegments(segments);
+	const rendered: string[] = [];
+	let previousEnd = 0;
+	for (const segment of merged) {
+		if (segment.start > previousEnd + 1) {
+			rendered.push(`${String(segment.start).padStart(4, " ")} | ...`);
+		}
+		for (let lineNumber = segment.start; lineNumber <= segment.end; lineNumber++) {
+			rendered.push(`${String(lineNumber).padStart(4, " ")} | ${lines[lineNumber - 1]}`);
+		}
+		previousEnd = segment.end;
+	}
+	if (previousEnd < lines.length) {
+		rendered.push(`${String(lines.length).padStart(4, " ")} | ... [truncated for quiz generation]`);
+	}
+	if (rendered.length > maxLines) {
+		return [...rendered.slice(0, maxLines - 1), `${String(lines.length).padStart(4, " ")} | ... [truncated for quiz generation]`].join(
+			"\n",
+		);
+	}
+	return rendered.join("\n");
+}
+
+function buildCodePreviewContent(raw: string, maxLines: number): string {
+	const lines = raw.split("\n");
+	if (lines.length <= maxLines) {
+		return lines.map((line, index) => `${String(index + 1).padStart(4, " ")} | ${line}`).join("\n");
+	}
+
+	const segments: Array<{ start: number; end: number }> = [
+		{ start: 1, end: Math.min(lines.length, CODE_PREVIEW_HEAD_LINES) },
+	];
+
+	let blocksAdded = 0;
+	for (let i = 0; i < lines.length && blocksAdded < CODE_PREVIEW_MAX_BLOCKS; i++) {
+		if (!looksLikeDefinitionLine(lines[i])) continue;
+		const segment = {
+			start: Math.max(1, i + 1 - 2),
+			end: Math.min(lines.length, i + 1 + CODE_PREVIEW_BLOCK_LINES - 3),
+		};
+		const overlaps = segments.some(
+			(existing) => !(segment.end < existing.start - SEGMENT_MERGE_GAP || segment.start > existing.end + SEGMENT_MERGE_GAP),
+		);
+		if (overlaps) continue;
+		segments.push(segment);
+		blocksAdded++;
+	}
+
+	if (lines.length > CODE_PREVIEW_TAIL_LINES) {
+		segments.push({
+			start: Math.max(1, lines.length - CODE_PREVIEW_TAIL_LINES + 1),
+			end: lines.length,
+		});
+	}
+
+	return renderLineSegments(lines, segments, maxLines);
+}
+
+function buildHeadPreviewContent(raw: string, maxLines: number, truncated: boolean): string {
+	const lines = raw.split("\n");
+	const rendered = lines.slice(0, maxLines).map((line, index) => `${String(index + 1).padStart(4, " ")} | ${line}`);
+	if (truncated) rendered.push(`${String(lines.length).padStart(4, " ")} | ... [truncated for quiz generation]`);
+	return rendered.join("\n");
 }
 
 function extractTextParts(content: unknown): string[] {
@@ -344,15 +458,15 @@ function filePreview(absPath: string, repoRoot: string, maxLines = MAX_FILE_LINE
 		const size = statSync(absPath).size;
 		let raw = readFileSync(absPath, "utf8");
 		if (!isProbablyText(raw)) return undefined;
-		if (raw.length > MAX_FILE_BYTES) raw = raw.slice(0, MAX_FILE_BYTES);
-		const lines = raw.split("\n");
-		const numbered = lines.slice(0, maxLines).map((line, index) => `${String(index + 1).padStart(4, " ")} | ${line}`);
-		if (lines.length > maxLines || size > MAX_FILE_BYTES) {
-			numbered.push(`${String(numbered.length + 1).padStart(4, " ")} | ... [truncated for quiz generation]`);
-		}
-
+		const wasTruncatedByBytes = raw.length > MAX_FILE_BYTES;
+		if (wasTruncatedByBytes) raw = raw.slice(0, MAX_FILE_BYTES);
 		const relPath = displayPath(relative(repoRoot, absPath));
-		const content = numbered.join("\n");
+		const ext = extname(relPath).toLowerCase();
+		const allLines = raw.split("\n");
+		const truncated = wasTruncatedByBytes || allLines.length > maxLines || size > MAX_FILE_BYTES;
+		const content = CODE_FILE_EXTENSIONS.has(ext)
+			? buildCodePreviewContent(raw, maxLines)
+			: buildHeadPreviewContent(raw, maxLines, truncated);
 		return {
 			id: "",
 			kind: relPath.toLowerCase().startsWith("readme") ? "readme" : "file",
@@ -411,7 +525,7 @@ function gatherSources(scope: ResolvedScope, ctx: ExtensionCommandContext, cwd: 
 	const recentFiles = collectRecentTrackedFiles(branch, cwd);
 	const sources: SourceItem[] = [];
 
-	if ((scope.kind === "workset" || scope.kind === "session" || scope.kind === "file") && recentConversation) {
+	if (recentConversation) {
 		addSource(sources, {
 			kind: "conversation",
 			title: "Recent session context",
@@ -518,7 +632,7 @@ function buildQuizPrompt(scope: ResolvedScope, sources: SourceItem[]): string {
 
 	const scopeGuidance =
 		scope.kind === "repo"
-			? "Bias toward architecture, boundaries, extension points, and how the codebase is meant to be used."
+			? "Bias toward architecture, boundaries, extension points, and how the codebase is meant to be used, while using any recent conversation context to prioritize what matters now."
 			: scope.kind === "file"
 				? "Bias toward the file's core abstraction, how to use it, key mechanism, and subtle assumptions."
 				: "Bias toward what the user is actively touching or has recently reasoned about.";
@@ -538,6 +652,8 @@ function buildQuizPrompt(scope: ResolvedScope, sources: SourceItem[]): string {
 		"- 1 subtle assumption / change impact / failure mode question",
 		"",
 		"Each card should be answerable from the provided sources and should help the user build a durable mental model.",
+		"If file or readme sources are available, prefer snippet-backed cards and include real snippets for at least 2 cards when helpful.",
+		"When writing snippet.code from numbered sources, strip the leading line-number prefixes like '  12 | ' and return only the actual code text.",
 		"",
 		"Return JSON of the form:",
 		JSON.stringify(
@@ -591,7 +707,7 @@ function extractJsonPayload(text: string): string {
 
 function fallbackSnippet(source?: SourceItem): QuizCardSnippet | undefined {
 	if (!source || (source.kind !== "file" && source.kind !== "readme")) return undefined;
-	const code = source.content.split("\n").slice(0, 12).join("\n");
+	const code = stripLineNumberPrefixes(source.content.split("\n").slice(0, 12).join("\n"));
 	return {
 		sourceId: source.id,
 		title: source.title,
@@ -624,6 +740,7 @@ function normalizePacket(raw: unknown, scope: ResolvedScope, sources: SourceItem
 			const primarySource = sourceIds.length > 0 ? sourceMap.get(sourceIds[0]) : undefined;
 			const rawSnippet =
 				card.snippet && typeof card.snippet === "object" ? (card.snippet as Record<string, unknown>) : undefined;
+			const snippetCode = safeString(rawSnippet?.code);
 			const snippet: QuizCardSnippet | undefined = rawSnippet
 				? {
 						sourceId: safeString(rawSnippet.sourceId) || sourceIds[0],
@@ -632,7 +749,7 @@ function normalizePacket(raw: unknown, scope: ResolvedScope, sources: SourceItem
 						startLine: typeof rawSnippet.startLine === "number" ? rawSnippet.startLine : undefined,
 						endLine: typeof rawSnippet.endLine === "number" ? rawSnippet.endLine : undefined,
 						language: safeString(rawSnippet.language) || primarySource?.language,
-						code: safeString(rawSnippet.code),
+						code: snippetCode ? stripLineNumberPrefixes(snippetCode) : undefined,
 				  }
 				: fallbackSnippet(primarySource);
 
