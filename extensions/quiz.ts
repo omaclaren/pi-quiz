@@ -2622,6 +2622,13 @@ async function handleGlimpseQuizCommand(
 }
 
 export default function activeCodeTutor(pi: ExtensionAPI) {
+	pi.registerCommand("quiz", {
+		description: "Open an active code-understanding quiz in a native Glimpse window",
+		handler: async (args, ctx) => {
+			await handleGlimpseQuizCommand(pi, args || "", ctx);
+		},
+	});
+
 	pi.registerCommand("quiz-close", {
 		description: "Close the active quiz window",
 		handler: async (_args, ctx) => {
@@ -2631,13 +2638,6 @@ export default function activeCodeTutor(pi: ExtensionAPI) {
 			}
 			activeQuizClose();
 			ctx.ui.notify("Code quiz closed", "info");
-		},
-	});
-
-	pi.registerCommand("quiz", {
-		description: "Open an active code-understanding quiz in a native Glimpse window",
-		handler: async (args, ctx) => {
-			await handleGlimpseQuizCommand(pi, args || "", ctx);
 		},
 	});
 }
