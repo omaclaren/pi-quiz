@@ -242,6 +242,7 @@ Style requirements for questions:
 - If you need to ask about an invariant or assumption, restate it in plain language.
 - Use the actual names from the code when they clarify meaning; do not replace a named quantity with vague phrases like "the second variable".
 - Favor operational prompts such as "how is this split?", "what comes back out?", "what decides X vs Y?", or "what would change if...".
+- If a card includes a snippet, the question must be answerable from that displayed snippet. Do not ask about a second type, function, or quantity unless it is actually visible in the snippet.
 
 Avoid:
 - trivia about tests, CI, file layout, naming conventions, tooling, or line-number memory
@@ -1062,6 +1063,8 @@ function buildQuizPrompt(scope: ResolvedScope, sources: SourceItem[], audience: 
 		"At most 1 card should be subtle or transfer.",
 		"Avoid opening with a gotcha, hidden-assumption, or failure-mode question unless the user explicitly asked for a hard challenge.",
 		"Each card should be answerable from the provided sources and should help the user build a durable mental model.",
+		"If a card includes a snippet, the user should be able to answer from that snippet without needing hidden off-screen lines.",
+		"Do not ask about a second type, function, or quantity unless it is actually visible in the displayed snippet. If you want to compare two things, include both in snippet.code or ask a narrower question.",
 		"Keep questions direct and natural. One card should usually target one main idea.",
 		"Prefer plain-language probes over formal wording. If you ask about an invariant, state it concretely in terms of what must stay the same or what round-trip should work.",
 		"Use actual names from the code when they clarify meaning. For example, prefer 'temperature or concentration' over 'the second variable' when the code makes that explicit.",
@@ -1069,6 +1072,8 @@ function buildQuizPrompt(scope: ResolvedScope, sources: SourceItem[], audience: 
 		"Better question style: 'If you stack a state and then unstack it, what should come back unchanged, and how can you see that from the slicing?'",
 		"Bad question style: 'How does this code decide which half is pressure and which half is the second variable?'",
 		"Better question style: 'When rebuilding a PTState or PCState from solver vector x, how does the code split the vector, and where does it decide whether the second block means temperature or concentration?'",
+		"Bad question style: showing only a PTState snippet but asking 'Why are PTState and PCState structurally the same?'",
+		"Better question style: either show both definitions in the snippet, or ask only about PTState from the visible lines.",
 		"If file, manifest, or readme sources are available, prefer snippet-backed cards and include real snippets for at least 2 cards when helpful.",
 		"When writing snippet.code from numbered sources, strip the leading line-number prefixes like '  12 | ' and return only the actual code text.",
 		"",
