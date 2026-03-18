@@ -14,12 +14,12 @@ The goal is not to generate polished summaries. The goal is to force **active en
 This package currently focuses on a small, low-overhead workflow:
 
 - one main command: `/quiz`
-- experimental richer UI via `/quiz-glimpse`
+- `/quiz` opens a native **Glimpse** window by default
+- `/quiz-glimpse` is kept as an alias
 - scope is central: `workset`, `session`, `repo`, `file <path>`
 - uses the **active model** and **active thinking level** for quiz generation
 - stores generated quiz packets as **hidden session entries**
-- shows the default quiz in an **overlay side panel** rather than replacing the main transcript
-- can also open a native **Glimpse** window with richer answer/feedback interaction
+- starts the Glimpse window immediately, then fills in the quiz once generation completes
 - shows real snippets as evidence, but only in service of a question
 
 It is **not** trying to be an Anki clone or a full spaced-repetition framework yet.
@@ -27,7 +27,7 @@ It is **not** trying to be an Anki clone or a full spaced-repetition framework y
 ## Commands
 
 ```text
-/quiz                             # default: current workset
+/quiz                             # default: current workset, opens native Glimpse UI
 /quiz workset
 /quiz session
 /quiz repo
@@ -35,16 +35,16 @@ It is **not** trying to be an Anki clone or a full spaced-repetition framework y
 /quiz src/foo.ts                  # shorthand for file scope when path exists
 /quiz repo --thinking off         # faster / less reasoning
 /quiz file src/foo.ts --thinking low
-/quiz-glimpse                     # native Glimpse window with richer answer/feedback UI
+/quiz-glimpse                     # alias for /quiz
 /quiz-glimpse repo --thinking off
-/quiz-focus                       # focus/unfocus the TUI quiz overlay
-/quiz-close                       # close the active quiz surface
+/quiz-close                       # close the active quiz window
+/quiz-focus                       # legacy TUI overlay control, mostly not needed now
 ```
 
 Shortcut:
 
 ```text
-Ctrl+Alt+Q            # focus/unfocus the quiz overlay
+Ctrl+Alt+Q            # legacy TUI overlay focus toggle, mostly not needed now
 ```
 
 ## Question style
@@ -136,8 +136,8 @@ A later phase can add a small reusable question bank keyed by scope + source fin
 
 ### Phase 3
 - [ ] deliberate-practice / drill mode
-- [ ] richer side-panel / overlay UX
-- [ ] optional glimpse-based visual variant
+- [ ] improve question quality on familiar repos and AI-generated code
+- [ ] optional packet reuse / regeneration avoidance
 
 ## Install locally
 

@@ -5,7 +5,7 @@ description: Scope-first active code-reading and code-understanding in quiz form
 
 # Code Quiz
 
-This package adds a `/quiz` command for active code-understanding.
+This package adds a `/quiz` command for active code-understanding. It opens a native Glimpse quiz window by default.
 
 ## When to use
 
@@ -23,6 +23,7 @@ Use this when the user wants:
 /quiz session
 /quiz repo
 /quiz file <path>
+/quiz-glimpse        # alias for /quiz
 ```
 
 ## Question style
