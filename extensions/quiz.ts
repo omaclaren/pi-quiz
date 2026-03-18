@@ -1740,7 +1740,7 @@ button:hover { border-color: var(--accent); }
       <div>
         <button onclick="closeQuiz()">Close</button>
       </div>
-      <div class="footer-note">You can leave this window open while the questions are prepared.</div>
+      <div class="footer-note">Leave this window open to see the quiz when it is ready. Close to cancel.</div>
     </div>
   </div>
 <script>
