@@ -49,7 +49,7 @@ From GitHub:
 pi install https://github.com/omaclaren/pi-code-quiz
 ```
 
-From npm (coming soon):
+From npm:
 
 ```bash
 pi install npm:pi-code-quiz

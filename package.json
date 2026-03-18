@@ -1,14 +1,31 @@
 {
   "name": "pi-code-quiz",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Active code-reading quiz for pi",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/omaclaren/pi-code-quiz.git"
+  },
+  "bugs": {
+    "url": "https://github.com/omaclaren/pi-code-quiz/issues"
+  },
+  "homepage": "https://github.com/omaclaren/pi-code-quiz#readme",
   "keywords": [
     "pi-package",
     "pi",
     "quiz",
     "learning",
     "code-understanding"
+  ],
+  "files": [
+    "extensions",
+    "skills",
+    "types",
+    "assets/screenshots",
+    "README.md",
+    "LICENSE"
   ],
   "pi": {
     "extensions": [
@@ -32,6 +49,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "glimpseui": "^0.5.1",
