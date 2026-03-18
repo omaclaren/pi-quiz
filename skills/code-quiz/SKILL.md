@@ -14,6 +14,7 @@ Use this when the user wants:
 - to build a mental model of code through retrieval / prediction / explanation
 - to understand a file, session, or codebase in a more tactile way
 - to learn core abstractions, interfaces, mechanisms, assumptions, and change impact
+- to answer a question first, then discuss that specific question further in a focused follow-up thread
 
 ## Command surface
 
@@ -43,6 +44,8 @@ Audience profiles:
 - `general` / `gen` — balanced, accessible questions
 - `scientist` / `sci` — representation, quantities, transformations, assumptions, perturbations
 - `developer` / `dev` — interfaces, control flow, contracts, extension points, debugging/refactoring
+
+After feedback is shown, the quiz UI can also open a short **Discuss further** thread anchored to that card.
 
 Avoid trivia like:
 - tests

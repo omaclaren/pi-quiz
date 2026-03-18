@@ -21,6 +21,7 @@ This package currently focuses on a small, low-overhead workflow:
 - stores generated quiz packets as **hidden session entries**
 - starts the Glimpse window immediately, then fills in the quiz once generation completes
 - aims for plain-language, direct questions rather than clever/formal wording
+- lets you discuss a question further after feedback, in a thread anchored to that card
 - shows real snippets as evidence, but only in service of a question
 
 It is **not** trying to be an Anki clone or a full spaced-repetition framework yet.
@@ -51,6 +52,18 @@ The quiz can lightly shift what it optimizes for:
 - `developer` / `dev` — emphasizes interfaces, control flow, contracts, extension points, debugging, and refactoring consequences
 
 This is meant to be a small prompt-level bias, not a giant separate feature branch.
+
+## Follow-up discussion
+
+After you answer a question and see the tutor feedback, you can open a **Discuss further** thread for that card.
+
+This is intended for:
+- asking for a more intuitive explanation
+- asking what a quantity or state really means
+- probing what would change under a perturbation
+- clarifying something you half-understood from the feedback
+
+The thread stays anchored to the current question, snippet, and ideal answer.
 
 ## Question style
 

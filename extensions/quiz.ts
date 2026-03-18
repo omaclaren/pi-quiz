@@ -87,11 +87,19 @@ interface QuizPacket {
 	cards: QuizCard[];
 }
 
+interface QuizDiscussionMessage {
+	role: "user" | "assistant";
+	text: string;
+	timestamp: string;
+}
+
 interface QuizRunAnswer {
 	cardId: string;
 	answer?: string;
 	viewedHint?: boolean;
 	skipped?: boolean;
+	feedback?: QuizAnswerFeedback;
+	discussion?: QuizDiscussionMessage[];
 }
 
 interface QuizRunRecord {
@@ -114,6 +122,10 @@ interface GlimpseQuizState {
 	draftAnswer?: string;
 	showHint?: boolean;
 	feedback?: QuizAnswerFeedback;
+	discussionOpen?: boolean;
+	discussionDraft?: string;
+	discussionPending?: boolean;
+	discussionMessages?: QuizDiscussionMessage[];
 }
 
 interface GlimpseQuizLaunchResult {
@@ -1358,6 +1370,81 @@ async function evaluateQuizAnswer(
 	return normalizeAnswerFeedback(data);
 }
 
+const DISCUSSION_SYSTEM_PROMPT = `You are continuing a code-understanding discussion for a single quiz card.
+
+Requirements:
+- Stay anchored to the current question, evidence snippet, answer feedback, and ideal answer.
+- Answer the user's follow-up directly and concisely in plain language.
+- Respect the intended audience profile.
+- Prefer 2-6 sentences unless the user explicitly asks for more detail.
+- Use actual names from the code when they clarify meaning.
+- If helpful, connect back to the user's earlier misunderstanding or to the key code slice.
+- Do not drift into unrelated repo-wide discussion unless the user explicitly asks.
+`;
+
+async function discussQuizCard(
+	ctx: ExtensionCommandContext,
+	packet: QuizPacket,
+	card: QuizCard,
+	answer: string | undefined,
+	feedback: QuizAnswerFeedback | undefined,
+	audience: QuizAudience,
+	thread: QuizDiscussionMessage[],
+	thinkingOverride?: QuizThinkingLevel,
+	signal?: AbortSignal,
+): Promise<string> {
+	if (!ctx.model) throw new Error("No active model selected");
+	const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+	const reasoning = ctx.model.reasoning ? toReasoning(thinkingOverride ?? "off") : undefined;
+	const snippetText = card.snippet?.code
+		? `Evidence snippet (${card.snippet.path || card.snippet.title || "snippet"}):\n${card.snippet.code}`
+		: "No snippet provided.";
+	const contextPrompt = [
+		`Scope: ${packet.scope.label}`,
+		`Quiz summary: ${packet.sourceSummary}`,
+		`Audience: ${audienceLabel(audience)}`,
+		`Question: ${card.question}`,
+		snippetText,
+		answer ? `User's original answer: ${answer}` : "User revealed the answer without entering an answer first.",
+		feedback ? `Tutor feedback: ${feedback.feedback}` : undefined,
+		feedback?.gotRight?.length ? `What the user got right: ${feedback.gotRight.join("; ")}` : undefined,
+		feedback?.missed?.length ? `What to tighten up: ${feedback.missed.join("; ")}` : undefined,
+		feedback?.nextFocus ? `Suggested next focus: ${feedback.nextFocus}` : undefined,
+		`Ideal answer: ${card.idealAnswer}`,
+		card.whyMatters ? `Why this matters: ${card.whyMatters}` : undefined,
+		card.misconception ? `Common trap: ${card.misconception}` : undefined,
+		"Continue a short, focused follow-up discussion about this single quiz question.",
+	].filter(Boolean).join("\n\n");
+
+	const threadTranscript = thread
+		.slice(-10)
+		.map((message) => `${message.role === "user" ? "User" : "Tutor"}: ${message.text}`)
+		.join("\n\n");
+	const prompt = [contextPrompt, threadTranscript ? `Discussion so far:\n\n${threadTranscript}` : undefined].filter(Boolean).join("\n\n");
+
+	const response = await completeSimple(
+		ctx.model,
+		{
+			systemPrompt: DISCUSSION_SYSTEM_PROMPT,
+			messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+		},
+		{
+			apiKey,
+			reasoning,
+			maxTokens: 1400,
+			signal,
+		},
+	);
+
+	const responseText = response.content
+		.filter((part): part is { type: "text"; text: string } => part.type === "text")
+		.map((part) => part.text)
+		.join("\n")
+		.trim();
+
+	return safeString(responseText) || "I couldn't add much to that yet, but we can keep probing this question from another angle.";
+}
+
 async function loadGlimpseModule(): Promise<any> {
 	if (!glimpseModulePromise) {
 		glimpseModulePromise = import("glimpseui");
@@ -1382,6 +1469,48 @@ function renderFeedbackList(title: string, items?: string[]): string {
 		  <ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
 		</div>
 	`;
+}
+
+function renderRichText(text?: string, fallback = ""): string {
+	const value = safeString(text) || fallback;
+	return escapeHtml(value).replace(/\n/g, "<br>");
+}
+
+function discussionPlaceholder(audience: QuizAudience): string {
+	switch (audience) {
+		case "scientist":
+			return "Ask for a more intuitive explanation, the meaning of the quantities, or what changes under a perturbation…";
+		case "developer":
+			return "Ask about control flow, contracts, edge cases, or refactor/debug consequences…";
+		default:
+			return "Ask for a more intuitive explanation, a concrete example, or what would change if something changed…";
+	}
+}
+
+function renderDiscussionThread(messages: QuizDiscussionMessage[] | undefined, pending: boolean | undefined): string {
+	const items = messages || [];
+	if (items.length === 0 && !pending) {
+		return `<div class="footer-note">This thread stays anchored to the current question. Ask for a more intuitive explanation, a concrete example, or what would change if some assumption changed.</div>`;
+	}
+	const renderedMessages = items
+		.map(
+			(message) => `
+				<div class="chat-message ${message.role === "user" ? "chat-user" : "chat-assistant"}">
+				  <div class="chat-role">${message.role === "user" ? "You" : "Tutor"}</div>
+				  <div>${renderRichText(message.text)}</div>
+				</div>
+			`,
+		)
+		.join("");
+	const pendingMessage = pending
+		? `
+			<div class="chat-message chat-assistant chat-pending">
+			  <div class="chat-role">Tutor</div>
+			  <div class="loading-inline"><span class="mini-spinner"></span><span>Thinking about this follow-up…</span></div>
+			</div>
+		`
+		: "";
+	return `<div class="chat-thread">${renderedMessages}${pendingMessage}</div>`;
 }
 
 function renderGlimpseLoadingHtml(scopeLabel: string, sourceSummary: string, message: string): string {
@@ -1530,6 +1659,24 @@ function renderGlimpseQuizHtml(
 				? "Missed core point"
 				: "Partial"
 		: "";
+	const discussionOpen = Boolean(state.discussionOpen);
+	const discussionSection = discussionOpen
+		? `
+			<div class="discussion-card">
+			  <div class="section-label">Discuss further</div>
+			  <div class="footer-note">Stay anchored to this question — ask for a more intuitive explanation, a concrete example, or what would change if some assumption changed.</div>
+			  ${renderDiscussionThread(state.discussionMessages, state.discussionPending)}
+			  <div>
+			    <textarea id="discussion-input" class="discussion-input" placeholder="${escapeHtml(discussionPlaceholder(packet.audience))}">${escapeHtml(state.discussionDraft ?? "")}</textarea>
+			  </div>
+			  <div class="actions">
+			    <button class="primary" onclick="sendFollowUp()" ${state.discussionPending ? "disabled" : ""}>Ask follow-up</button>
+			    <button onclick="hideDiscussion()">Hide discussion</button>
+			  </div>
+			  <div class="footer-note">⌘/Ctrl+Enter sends follow-up</div>
+			</div>
+		`
+		: "";
 
 	const questionActions = `
 		<div class="actions">
@@ -1543,6 +1690,7 @@ function renderGlimpseQuizHtml(
 
 	const revealActions = `
 		<div class="actions">
+		  <button onclick="${discussionOpen ? "hideDiscussion()" : "openDiscussion()"}">${discussionOpen ? "Hide discussion" : "Discuss further"}</button>
 		  <button class="primary" onclick="nextQuestion()">${index < packet.cards.length ? "Next question" : "Finish"}</button>
 		  <button class="ghost" onclick="closeQuiz()">Close</button>
 		</div>
@@ -1653,14 +1801,15 @@ button.primary { background: var(--accent); color: white; border-color: var(--ac
 button.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 button.ghost { color: var(--muted); }
 button:hover { border-color: var(--accent); }
-.hint, .feedback-card, .answer-card {
+button:disabled { opacity: 0.65; cursor: default; }
+.hint, .feedback-card, .answer-card, .discussion-card {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 14px;
   background: rgba(255,255,255,0.48);
 }
 @media (prefers-color-scheme: dark) {
-  .hint, .feedback-card, .answer-card { background: rgba(255,255,255,0.03); }
+  .hint, .feedback-card, .answer-card, .discussion-card { background: rgba(255,255,255,0.03); }
 }
 .feedback-card.assessment-good { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
 .feedback-card.assessment-partial { border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
@@ -1677,6 +1826,50 @@ button:hover { border-color: var(--accent); }
 .feedback-title { font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
 .feedback-block ul { margin: 8px 0 0 18px; padding: 0; }
 .footer-note { font-size: 12px; color: var(--muted); }
+.discussion-input { min-height: 110px; }
+.chat-thread {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 4px;
+}
+.chat-message {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+.chat-user {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.chat-assistant {
+  background: rgba(255,255,255,0.32);
+}
+@media (prefers-color-scheme: dark) {
+  .chat-assistant { background: rgba(255,255,255,0.02); }
+}
+.chat-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.loading-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.mini-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
 .loading {
   display: grid;
   gap: 12px;
@@ -1730,21 +1923,22 @@ button:hover { border-color: var(--accent); }
         ` : `
           <div class="answer-card">
             <div class="section-label">Your answer</div>
-            <div>${answer ? escapeHtml(answer).replace(/\n/g, "<br>") : "<em>No answer recorded.</em>"}</div>
+            <div>${answer ? renderRichText(answer) : "<em>No answer recorded.</em>"}</div>
           </div>
           <div class="feedback-card ${assessmentClass}">
             ${state.feedback ? `<div class="assessment"><strong>${escapeHtml(assessmentLabel)}</strong></div>` : ""}
             <div class="section-label">Tutor feedback</div>
-            <div>${escapeHtml(state.feedback?.feedback || "No evaluation provided.").replace(/\n/g, "<br>")}</div>
+            <div>${renderRichText(state.feedback?.feedback, "No evaluation provided.")}</div>
             ${renderFeedbackList("What you got right", state.feedback?.gotRight)}
             ${renderFeedbackList("What to tighten up", state.feedback?.missed)}
-            ${state.feedback?.nextFocus ? `<div class="feedback-block"><div class="feedback-title">Next focus</div><div>${escapeHtml(state.feedback.nextFocus)}</div></div>` : ""}
+            ${state.feedback?.nextFocus ? `<div class="feedback-block"><div class="feedback-title">Next focus</div><div>${renderRichText(state.feedback.nextFocus)}</div></div>` : ""}
           </div>
           <div class="answer-card">
             <div class="section-label">Ideal answer</div>
-            <div>${escapeHtml(card.idealAnswer).replace(/\n/g, "<br>")}</div>
+            <div>${renderRichText(card.idealAnswer)}</div>
           </div>
-          ${card.whyMatters ? `<div class="answer-card"><div class="section-label">Why this matters</div><div>${escapeHtml(card.whyMatters)}</div></div>` : ""}
+          ${card.whyMatters ? `<div class="answer-card"><div class="section-label">Why this matters</div><div>${renderRichText(card.whyMatters)}</div></div>` : ""}
+          ${discussionSection}
           ${revealActions}
         `}
       `}
@@ -1752,19 +1946,29 @@ button:hover { border-color: var(--accent); }
   </div>
 <script>
   const answerEl = () => document.getElementById('answer');
+  const discussionEl = () => document.getElementById('discussion-input');
   function currentAnswer() { return answerEl() ? answerEl().value : ${JSON.stringify(answer)}; }
+  function currentDiscussion() { return discussionEl() ? discussionEl().value : ${JSON.stringify(state.discussionDraft ?? "")}; }
   function send(payload) { window.glimpse.send(payload); }
   function submitAnswer() { send({ type: 'submit', answer: currentAnswer() }); }
   function revealAnswer() { send({ type: 'reveal', answer: currentAnswer() }); }
   function toggleHint() { send({ type: 'toggle-hint', answer: currentAnswer() }); }
   function skipQuestion() { send({ type: 'skip' }); }
   function nextQuestion() { send({ type: 'next' }); }
+  function openDiscussion() { send({ type: 'open-discussion', answer: currentAnswer(), discussion: currentDiscussion() }); }
+  function hideDiscussion() { send({ type: 'hide-discussion', answer: currentAnswer(), discussion: currentDiscussion() }); }
+  function sendFollowUp() { send({ type: 'send-follow-up', answer: currentAnswer(), discussion: currentDiscussion() }); }
   function closeQuiz() { send({ type: 'close' }); }
   document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submitAnswer(); }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (discussionEl()) sendFollowUp();
+      else submitAnswer();
+    }
     if (e.key === 'Escape') { e.preventDefault(); closeQuiz(); }
   });
-  if (answerEl()) answerEl().focus();
+  if (discussionEl()) discussionEl().focus();
+  else if (answerEl()) answerEl().focus();
 </script>
 </body>
 </html>`;
@@ -1791,11 +1995,19 @@ async function runGlimpseQuizFlow(
 		let packet: QuizPacket | undefined;
 		const answers: QuizRunAnswer[] = [];
 		let index = 0;
-		let state: GlimpseQuizState = { stage: "loading", draftAnswer: "", showHint: false };
+		let state: GlimpseQuizState = {
+			stage: "loading",
+			draftAnswer: "",
+			showHint: false,
+			discussionOpen: false,
+			discussionDraft: "",
+			discussionPending: false,
+			discussionMessages: [],
+		};
 		let currentRecord: QuizRunAnswer | null = null;
 		let currentPersisted = false;
 		const generationAbort = new AbortController();
-		const evaluationAbort = new AbortController();
+		let pendingRequestAbort: AbortController | null = null;
 		const windowHandle = open(renderGlimpseLoadingHtml(scope.label, loadingSummary, loadingMessage), {
 			width: 920,
 			height: 860,
@@ -1805,6 +2017,29 @@ async function runGlimpseQuizFlow(
 		});
 
 		const card = () => packet?.cards[index];
+		const abortPendingRequest = () => {
+			if (pendingRequestAbort) {
+				pendingRequestAbort.abort();
+				pendingRequestAbort = null;
+			}
+		};
+		const snapshotCurrentRecord = (cardId: string, answerText?: string, overrides: Partial<QuizRunAnswer> = {}): QuizRunAnswer => {
+			const record: QuizRunAnswer = {
+				cardId,
+				viewedHint: Boolean(state.showHint),
+			};
+			const normalizedAnswer = safeString(answerText);
+			if (normalizedAnswer) record.answer = normalizedAnswer;
+			if (state.feedback) record.feedback = state.feedback;
+			if (state.discussionMessages && state.discussionMessages.length > 0) {
+				record.discussion = state.discussionMessages.map((message) => ({ ...message }));
+			}
+			return { ...record, ...overrides };
+		};
+		const syncCurrentRecord = (cardId: string, answerText?: string, overrides: Partial<QuizRunAnswer> = {}) => {
+			currentRecord = snapshotCurrentRecord(cardId, answerText, overrides);
+			currentPersisted = false;
+		};
 		const persistCurrentRecord = () => {
 			if (currentRecord && !currentPersisted) {
 				answers.push(currentRecord);
@@ -1812,7 +2047,15 @@ async function runGlimpseQuizFlow(
 			}
 		};
 		const resetQuestionState = () => {
-			state = { stage: "question", draftAnswer: "", showHint: false };
+			state = {
+				stage: "question",
+				draftAnswer: "",
+				showHint: false,
+				discussionOpen: false,
+				discussionDraft: "",
+				discussionPending: false,
+				discussionMessages: [],
+			};
 			currentRecord = null;
 			currentPersisted = false;
 		};
@@ -1830,7 +2073,7 @@ async function runGlimpseQuizFlow(
 			if (finished) return;
 			finished = true;
 			generationAbort.abort();
-			evaluationAbort.abort();
+			abortPendingRequest();
 			activeQuizClose = null;
 			if (packet) {
 				resolve({
@@ -1850,17 +2093,17 @@ async function runGlimpseQuizFlow(
 		activeQuizClose = () => {
 			persistCurrentRecord();
 			generationAbort.abort();
-			evaluationAbort.abort();
+			abortPendingRequest();
 			windowHandle.close();
 		};
 
 		windowHandle.on("message", async (message: unknown) => {
 			if (finished || !message || typeof message !== "object") return;
-			const payload = message as { type?: string; answer?: unknown };
+			const payload = message as { type?: string; answer?: unknown; discussion?: unknown };
 			if (payload.type === "close") {
 				persistCurrentRecord();
 				generationAbort.abort();
-				evaluationAbort.abort();
+				abortPendingRequest();
 				windowHandle.close();
 				return;
 			}
@@ -1869,6 +2112,7 @@ async function runGlimpseQuizFlow(
 			const currentCard = card();
 			if (!currentCard) return;
 			const answer = typeof payload.answer === "string" ? payload.answer : state.draftAnswer || "";
+			const discussionDraft = typeof payload.discussion === "string" ? payload.discussion : state.discussionDraft || "";
 
 			switch (payload.type) {
 				case "toggle-hint":
@@ -1876,7 +2120,8 @@ async function runGlimpseQuizFlow(
 					rerender();
 					return;
 				case "skip":
-					answers.push({ cardId: currentCard.id, skipped: true, viewedHint: Boolean(state.showHint) });
+					abortPendingRequest();
+					answers.push(snapshotCurrentRecord(currentCard.id, answer, { skipped: true }));
 					if (index >= packet.cards.length - 1) {
 						windowHandle.close();
 					} else {
@@ -1886,28 +2131,50 @@ async function runGlimpseQuizFlow(
 					}
 					return;
 				case "reveal":
-					state = { stage: "reveal", draftAnswer: answer, showHint: Boolean(state.showHint) };
-					currentRecord = { cardId: currentCard.id, answer: safeString(answer), viewedHint: Boolean(state.showHint) };
-					currentPersisted = false;
+					state = {
+						stage: "reveal",
+						draftAnswer: answer,
+						showHint: Boolean(state.showHint),
+						discussionOpen: false,
+						discussionDraft: "",
+						discussionPending: false,
+						discussionMessages: [],
+					};
+					syncCurrentRecord(currentCard.id, answer);
 					rerender();
 					return;
 				case "submit": {
-					state = { stage: "evaluating", draftAnswer: answer, showHint: Boolean(state.showHint) };
-					currentRecord = { cardId: currentCard.id, answer: safeString(answer), viewedHint: Boolean(state.showHint) };
-					currentPersisted = false;
+					abortPendingRequest();
+					state = {
+						stage: "evaluating",
+						draftAnswer: answer,
+						showHint: Boolean(state.showHint),
+						discussionOpen: false,
+						discussionDraft: "",
+						discussionPending: false,
+						discussionMessages: [],
+					};
+					syncCurrentRecord(currentCard.id, answer);
 					rerender();
+					const requestAbort = new AbortController();
+					pendingRequestAbort = requestAbort;
 					try {
-						const feedback = await evaluateQuizAnswer(ctx, currentCard, answer, audience, thinkingOverride, evaluationAbort.signal);
-						if (finished) return;
+						const feedback = await evaluateQuizAnswer(ctx, currentCard, answer, audience, thinkingOverride, requestAbort.signal);
+						if (finished || requestAbort.signal.aborted || !packet || card()?.id !== currentCard.id) return;
 						state = {
 							stage: "reveal",
 							draftAnswer: answer,
 							showHint: Boolean(state.showHint),
 							feedback,
+							discussionOpen: false,
+							discussionDraft: "",
+							discussionPending: false,
+							discussionMessages: [],
 						};
+						syncCurrentRecord(currentCard.id, answer);
 						rerender();
 					} catch (error) {
-						if (finished || evaluationAbort.signal.aborted) return;
+						if (finished || requestAbort.signal.aborted) return;
 						state = {
 							stage: "reveal",
 							draftAnswer: answer,
@@ -1919,12 +2186,102 @@ async function runGlimpseQuizFlow(
 										? `Could not evaluate the answer cleanly: ${error.message}`
 										: "Could not evaluate the answer cleanly.",
 							},
+							discussionOpen: false,
+							discussionDraft: "",
+							discussionPending: false,
+							discussionMessages: [],
 						};
+						syncCurrentRecord(currentCard.id, answer);
 						rerender();
+					} finally {
+						if (pendingRequestAbort === requestAbort) pendingRequestAbort = null;
+					}
+					return;
+				}
+				case "open-discussion":
+					state = { ...state, draftAnswer: answer, discussionOpen: true, discussionDraft };
+					rerender();
+					return;
+				case "hide-discussion":
+					state = { ...state, draftAnswer: answer, discussionOpen: false, discussionDraft };
+					rerender();
+					return;
+				case "send-follow-up": {
+					const userPrompt = safeString(discussionDraft);
+					state = { ...state, draftAnswer: answer, discussionOpen: true, discussionDraft };
+					if (!userPrompt) {
+						rerender();
+						return;
+					}
+					abortPendingRequest();
+					const thread: QuizDiscussionMessage[] = [
+						...(state.discussionMessages || []),
+						{ role: "user", text: userPrompt, timestamp: new Date().toISOString() },
+					];
+					state = {
+						...state,
+						draftAnswer: answer,
+						discussionOpen: true,
+						discussionDraft: "",
+						discussionPending: true,
+						discussionMessages: thread,
+					};
+					syncCurrentRecord(currentCard.id, answer);
+					rerender();
+					const requestAbort = new AbortController();
+					pendingRequestAbort = requestAbort;
+					try {
+						const reply = await discussQuizCard(
+							ctx,
+							packet,
+							currentCard,
+							safeString(answer),
+							state.feedback,
+							audience,
+							thread,
+							thinkingOverride,
+							requestAbort.signal,
+						);
+						if (finished || requestAbort.signal.aborted || !packet || card()?.id !== currentCard.id) return;
+						state = {
+							...state,
+							draftAnswer: answer,
+							discussionOpen: true,
+							discussionDraft: "",
+							discussionPending: false,
+							discussionMessages: [...thread, { role: "assistant", text: reply, timestamp: new Date().toISOString() }],
+						};
+						syncCurrentRecord(currentCard.id, answer);
+						rerender();
+					} catch (error) {
+						if (finished || requestAbort.signal.aborted) return;
+						state = {
+							...state,
+							draftAnswer: answer,
+							discussionOpen: true,
+							discussionDraft: "",
+							discussionPending: false,
+							discussionMessages: [
+								...thread,
+								{
+									role: "assistant",
+									text:
+										error instanceof Error
+											? `I couldn't continue the discussion cleanly: ${error.message}`
+											: "I couldn't continue the discussion cleanly.",
+									timestamp: new Date().toISOString(),
+								},
+							],
+						};
+						syncCurrentRecord(currentCard.id, answer);
+						rerender();
+					} finally {
+						if (pendingRequestAbort === requestAbort) pendingRequestAbort = null;
 					}
 					return;
 				}
 				case "next":
+					abortPendingRequest();
 					persistCurrentRecord();
 					if (index >= packet.cards.length - 1) {
 						windowHandle.close();
