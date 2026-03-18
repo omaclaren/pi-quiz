@@ -1,11 +1,5 @@
 import { completeSimple, type ThinkingLevel } from "@mariozechner/pi-ai";
-import {
-	BorderedLoader,
-	getMarkdownTheme,
-	type ExtensionAPI,
-	type ExtensionCommandContext,
-	type Theme,
-} from "@mariozechner/pi-coding-agent";
+import { getMarkdownTheme, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@mariozechner/pi-coding-agent";
 import { Container, Key, Markdown, matchesKey, Text, type OverlayHandle, visibleWidth } from "@mariozechner/pi-tui";
 import { jsonrepair } from "jsonrepair";
 import { execSync } from "node:child_process";
@@ -1144,21 +1138,26 @@ async function generateQuizPacket(
 	return normalizePacket(data, scope, sources);
 }
 
-class QuizCardPanel {
+abstract class CachedOverlayPanel {
 	private _focused = false;
+	protected cachedWidth?: number;
+	protected cachedLines?: string[];
+
 	get focused(): boolean {
 		return this._focused;
 	}
+
 	set focused(value: boolean) {
 		if (this._focused === value) return;
 		this._focused = value;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
 	}
+}
+
+class QuizCardPanel extends CachedOverlayPanel {
 	private container: Container;
 	private showHint = false;
-	private cachedWidth?: number;
-	private cachedLines?: string[];
 
 	constructor(
 		private theme: Theme,
@@ -1170,6 +1169,7 @@ class QuizCardPanel {
 		private done: (value: { action: QuestionStageAction | RevealStageAction; viewedHint?: boolean }) => void,
 		private userAnswer?: string,
 	) {
+		super();
 		this.container = this.buildContainer();
 	}
 
@@ -1291,6 +1291,79 @@ class QuizCardPanel {
 
 		if (lower === "n" || matchesKey(data, "enter")) return this.done({ action: "next" });
 		if (lower === "q" || matchesKey(data, "escape")) return this.done({ action: "quit" });
+	}
+}
+
+class QuizLoadingPanel extends CachedOverlayPanel {
+	private container: Container;
+
+	constructor(
+		private theme: Theme,
+		private message: string,
+		private onCancel: () => void,
+	) {
+		super();
+		this.container = this.buildContainer();
+	}
+
+	private titleText(): string {
+		const badge = this.focused ? this.theme.fg("success", "● focused") : this.theme.fg("warning", "○ passive");
+		return `${this.theme.fg("accent", this.theme.bold("CODE QUIZ"))} ${badge}`;
+	}
+
+	private footerText(): string {
+		if (!this.focused) {
+			return this.theme.fg("dim", "Generating in background · Ctrl+Alt+Q to focus · /quiz-close cancels");
+		}
+		return this.theme.fg("dim", "q or Esc cancel · Ctrl+Alt+Q return to editor");
+	}
+
+	private buildContainer(): Container {
+		const container = new Container();
+		container.addChild(new Text(this.titleText(), 1, 0));
+		container.addChild(new Text(this.theme.fg("muted", "Preparing questions from current scope..."), 1, 0));
+		container.addChild(new Text(this.message, 1, 1));
+		container.addChild(new Text(this.footerText(), 1, 0));
+		return container;
+	}
+
+	private rebuild(): void {
+		this.container = this.buildContainer();
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+
+	render(width: number): string[] {
+		if (this.cachedWidth === width && this.cachedLines) {
+			return this.cachedLines;
+		}
+
+		const contentWidth = Math.max(20, width - 4);
+		const borderPalette = this.focused ? "accent" : "warning";
+		const borderColor = (s: string) => this.theme.fg(borderPalette, s);
+		const innerLines = this.container.render(contentWidth);
+		const padLine = (line: string) => line + " ".repeat(Math.max(0, contentWidth - visibleWidth(line)));
+		const rendered = [
+			borderColor(`┏${"━".repeat(Math.max(0, contentWidth + 2))}┓`),
+			...innerLines.map((line) => `${borderColor("┃")} ${padLine(line)} ${borderColor("┃")}`),
+			borderColor(`┗${"━".repeat(Math.max(0, contentWidth + 2))}┛`),
+		];
+		this.cachedWidth = width;
+		this.cachedLines = rendered;
+		return rendered;
+	}
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+		this.container.invalidate();
+	}
+
+	handleInput(data: string): void {
+		const lower = data.length === 1 ? data.toLowerCase() : undefined;
+		if (lower === "q" || matchesKey(data, "escape")) {
+			this.onCancel();
+		}
 	}
 }
 
@@ -1485,27 +1558,43 @@ export default function activeCodeTutor(pi: ExtensionAPI) {
 
 			const effectiveThinkingLevel = thinkingLevel ?? pi.getThinkingLevel();
 			let generationError: string | undefined;
+			let handleRef: OverlayHandle | null = null;
+			const generationAbort = new AbortController();
 			const packet = await ctx.ui.custom<QuizPacket | null>(
-				(tui, theme, _kb, done) => {
+				(_tui, theme, _kb, done) => {
 					const thinkingLabel = ctx.model!.reasoning ? ` · thinking ${effectiveThinkingLevel}` : "";
-					const loader = new BorderedLoader(
-						tui,
-						theme,
-						`Generating quiz with ${ctx.model!.id}${thinkingLabel} for ${scope.label}...`,
-					);
-					loader.onAbort = () => done(null);
+					activeQuizClose = () => {
+						generationAbort.abort();
+						done(null);
+					};
 
-					generateQuizPacket(pi, ctx, scope, sources, loader.signal, thinkingLevel)
+					generateQuizPacket(pi, ctx, scope, sources, generationAbort.signal, thinkingLevel)
 						.then(done)
 						.catch((err) => {
 							generationError = err instanceof Error ? err.message : String(err);
 							done(null);
 						});
 
-					return loader;
+					return new QuizLoadingPanel(
+						theme,
+						`Generating quiz with ${ctx.model!.id}${thinkingLabel} for ${scope.label}...`,
+						() => {
+							generationAbort.abort();
+							done(null);
+						},
+					);
 				},
-				{ overlay: true, overlayOptions: QUIZ_LOADER_OVERLAY_OPTIONS },
+				{
+					overlay: true,
+					overlayOptions: QUIZ_LOADER_OVERLAY_OPTIONS,
+					onHandle: (handle) => {
+						handleRef = handle;
+						activeQuizOverlayHandle = handle;
+					},
+				},
 			);
+			if (activeQuizOverlayHandle === handleRef) activeQuizOverlayHandle = null;
+			activeQuizClose = null;
 
 			if (!packet) {
 				ctx.ui.notify(generationError || "Quiz generation cancelled", generationError ? "error" : "info");
