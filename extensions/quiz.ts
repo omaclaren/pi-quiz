@@ -6,7 +6,7 @@ import {
 	type ExtensionCommandContext,
 	type Theme,
 } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, matchesKey, Text, visibleWidth } from "@mariozechner/pi-tui";
+import { Container, Key, Markdown, matchesKey, Text, type OverlayHandle, visibleWidth } from "@mariozechner/pi-tui";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -108,6 +108,9 @@ interface QuizRunRecord {
 type QuestionStageAction = "answer" | "reveal" | "skip" | "quit";
 type RevealStageAction = "next" | "quit";
 
+let activeQuizOverlayHandle: OverlayHandle | null = null;
+let activeQuizClose: (() => void) | null = null;
+
 const MAX_CONVERSATION_MESSAGES = 8;
 const MAX_TRACKED_FILES = 3;
 const MAX_FILE_LINES = 220;
@@ -120,11 +123,12 @@ const CODE_PREVIEW_TAIL_LINES = 24;
 const CODE_PREVIEW_MAX_BLOCKS = 4;
 const SEGMENT_MERGE_GAP = 2;
 const QUIZ_OVERLAY_OPTIONS = {
-	anchor: "right-center" as const,
-	width: "48%" as const,
-	minWidth: 56,
-	maxHeight: "88%" as const,
-	margin: { top: 1, right: 1, bottom: 1 },
+	anchor: "top-right" as const,
+	width: "44%" as const,
+	minWidth: 48,
+	maxHeight: "78%" as const,
+	margin: { top: 1, right: 1 },
+	nonCapturing: true,
 };
 const QUIZ_LOADER_OVERLAY_OPTIONS = {
 	anchor: "top-center" as const,
@@ -1098,11 +1102,11 @@ class QuizCardPanel {
 			return this.theme.fg(
 				"dim",
 				this.card.hint
-					? "a answer  ·  h hint  ·  r reveal  ·  s skip  ·  q quit"
-					: "a answer  ·  r reveal  ·  s skip  ·  q quit",
+					? "Ctrl+Alt+Q focus/unfocus · when focused: a answer · h hint · r reveal · s skip · q quit"
+					: "Ctrl+Alt+Q focus/unfocus · when focused: a answer · r reveal · s skip · q quit",
 			);
 		}
-		return this.theme.fg("dim", "n next  ·  q quit");
+		return this.theme.fg("dim", "Ctrl+Alt+Q focus/unfocus · when focused: n next · q quit");
 	}
 
 	private renderMarkdown(): string {
@@ -1201,19 +1205,36 @@ async function showQuestionStage(
 	card: QuizCard,
 	index: number,
 ): Promise<{ action: QuestionStageAction; viewedHint: boolean }> {
-	return ctx.ui.custom<{ action: QuestionStageAction; viewedHint: boolean }>(
-		(_, theme, __, done) =>
-			new QuizCardPanel(
-				theme,
-				packet.scope.label,
-				card,
-				index,
-				packet.cards.length,
-				"question",
-				(result) => done({ action: result.action as QuestionStageAction, viewedHint: Boolean(result.viewedHint) }),
-			),
-		{ overlay: true, overlayOptions: QUIZ_OVERLAY_OPTIONS },
-	);
+	let handleRef: OverlayHandle | null = null;
+	try {
+		ctx.ui.setStatus("code-quiz", "Code Quiz open · Ctrl+Alt+Q to focus/unfocus overlay");
+		return await ctx.ui.custom<{ action: QuestionStageAction; viewedHint: boolean }>(
+			(_, theme, __, done) => {
+				activeQuizClose = () => done({ action: "quit", viewedHint: false });
+				return new QuizCardPanel(
+					theme,
+					packet.scope.label,
+					card,
+					index,
+					packet.cards.length,
+					"question",
+					(result) => done({ action: result.action as QuestionStageAction, viewedHint: Boolean(result.viewedHint) }),
+				);
+			},
+			{
+				overlay: true,
+				overlayOptions: QUIZ_OVERLAY_OPTIONS,
+				onHandle: (handle) => {
+					handleRef = handle;
+					activeQuizOverlayHandle = handle;
+				},
+			},
+		);
+	} finally {
+		if (activeQuizOverlayHandle === handleRef) activeQuizOverlayHandle = null;
+		activeQuizClose = null;
+		ctx.ui.setStatus("code-quiz", undefined);
+	}
 }
 
 async function showRevealStage(
@@ -1223,20 +1244,37 @@ async function showRevealStage(
 	index: number,
 	userAnswer?: string,
 ): Promise<{ action: RevealStageAction }> {
-	return ctx.ui.custom<{ action: RevealStageAction }>(
-		(_, theme, __, done) =>
-			new QuizCardPanel(
-				theme,
-				packet.scope.label,
-				card,
-				index,
-				packet.cards.length,
-				"reveal",
-				(result) => done({ action: result.action as RevealStageAction }),
-				userAnswer,
-			),
-		{ overlay: true, overlayOptions: QUIZ_OVERLAY_OPTIONS },
-	);
+	let handleRef: OverlayHandle | null = null;
+	try {
+		ctx.ui.setStatus("code-quiz", "Code Quiz open · Ctrl+Alt+Q to focus/unfocus overlay");
+		return await ctx.ui.custom<{ action: RevealStageAction }>(
+			(_, theme, __, done) => {
+				activeQuizClose = () => done({ action: "quit" });
+				return new QuizCardPanel(
+					theme,
+					packet.scope.label,
+					card,
+					index,
+					packet.cards.length,
+					"reveal",
+					(result) => done({ action: result.action as RevealStageAction }),
+					userAnswer,
+				);
+			},
+			{
+				overlay: true,
+				overlayOptions: QUIZ_OVERLAY_OPTIONS,
+				onHandle: (handle) => {
+					handleRef = handle;
+					activeQuizOverlayHandle = handle;
+				},
+			},
+		);
+	} finally {
+		if (activeQuizOverlayHandle === handleRef) activeQuizOverlayHandle = null;
+		activeQuizClose = null;
+		ctx.ui.setStatus("code-quiz", undefined);
+	}
 }
 
 async function runQuiz(packet: QuizPacket, ctx: ExtensionCommandContext): Promise<QuizRunRecord> {
@@ -1278,6 +1316,52 @@ async function runQuiz(packet: QuizPacket, ctx: ExtensionCommandContext): Promis
 }
 
 export default function activeCodeTutor(pi: ExtensionAPI) {
+	pi.registerShortcut(Key.ctrlAlt("q"), {
+		description: "Focus or unfocus the active code quiz overlay",
+		handler: async (ctx) => {
+			if (!activeQuizOverlayHandle) {
+				ctx.ui.notify("No code quiz overlay is open", "info");
+				return;
+			}
+			if (activeQuizOverlayHandle.isFocused()) {
+				activeQuizOverlayHandle.unfocus();
+				ctx.ui.notify("Code quiz unfocused", "info");
+			} else {
+				activeQuizOverlayHandle.focus();
+				ctx.ui.notify("Code quiz focused", "info");
+			}
+		},
+	});
+
+	pi.registerCommand("quiz-focus", {
+		description: "Focus or unfocus the active code quiz overlay",
+		handler: async (_args, ctx) => {
+			if (!activeQuizOverlayHandle) {
+				ctx.ui.notify("No code quiz overlay is open", "info");
+				return;
+			}
+			if (activeQuizOverlayHandle.isFocused()) {
+				activeQuizOverlayHandle.unfocus();
+				ctx.ui.notify("Code quiz unfocused", "info");
+			} else {
+				activeQuizOverlayHandle.focus();
+				ctx.ui.notify("Code quiz focused", "info");
+			}
+		},
+	});
+
+	pi.registerCommand("quiz-close", {
+		description: "Close the active code quiz overlay",
+		handler: async (_args, ctx) => {
+			if (!activeQuizClose) {
+				ctx.ui.notify("No code quiz overlay is open", "info");
+				return;
+			}
+			activeQuizClose();
+			ctx.ui.notify("Code quiz closed", "info");
+		},
+	});
+
 	pi.registerCommand("quiz", {
 		description: "Generate an active code-understanding quiz for the current workset, session, repo, or file",
 		handler: async (args, ctx) => {
@@ -1328,7 +1412,7 @@ export default function activeCodeTutor(pi: ExtensionAPI) {
 			}
 
 			pi.appendEntry("code-quiz.packet", packet);
-			ctx.ui.notify(`Generated ${packet.cards.length} quiz cards for ${packet.scope.label}`, "info");
+			ctx.ui.notify(`Generated ${packet.cards.length} quiz cards for ${packet.scope.label}. Ctrl+Alt+Q focuses the overlay.`, "info");
 
 			const run = await runQuiz(packet, ctx);
 			pi.appendEntry("code-quiz.run", run);

@@ -31,6 +31,14 @@ It is **not** trying to be an Anki clone or a full spaced-repetition framework y
 /quiz repo
 /quiz file src/foo.ts
 /quiz src/foo.ts      # shorthand for file scope when path exists
+/quiz-focus           # focus/unfocus the quiz overlay
+/quiz-close           # close the quiz overlay
+```
+
+Shortcut:
+
+```text
+Ctrl+Alt+Q            # focus/unfocus the quiz overlay
 ```
 
 ## Question style
