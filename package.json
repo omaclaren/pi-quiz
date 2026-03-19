@@ -1,6 +1,6 @@
 {
   "name": "pi-code-quiz",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Active code-reading quiz for pi",
   "type": "module",
   "license": "MIT",
