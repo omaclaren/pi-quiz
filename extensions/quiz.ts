@@ -1178,6 +1178,10 @@ function formatQuizParseError(
 	);
 }
 
+function isThinkingOnlyResponse(responseText: string, responsePartTypes: string[]): boolean {
+	return responseText.trim().length === 0 && responsePartTypes.length > 0 && responsePartTypes.every((type) => type === "thinking");
+}
+
 function parseJsonPayloadText(text: string, label: string): { data: unknown; repaired: boolean } {
 	const payload = extractJsonPayload(text);
 	try {
@@ -1348,14 +1352,18 @@ async function generateQuizPacket(
 	const basePrompt = buildQuizPrompt(scope, sources, audience, previousCards);
 	const reasoning = ctx.model.reasoning ? toReasoning(thinkingOverride ?? pi.getThinkingLevel()) : undefined;
 	let lastError: Error | undefined;
+	let retryWithoutThinking = false;
 
 	for (let attempt = 1; attempt <= QUIZ_GENERATION_MAX_ATTEMPTS; attempt++) {
+		const attemptReasoning = retryWithoutThinking ? undefined : reasoning;
 		const prompt =
 			attempt === 1
 				? basePrompt
 				: [
 						basePrompt,
-						"The previous attempt returned malformed JSON.",
+						retryWithoutThinking
+							? "The previous attempt returned only thinking content and no final text response. Regenerate the full payload as plain JSON text."
+							: "The previous attempt returned malformed JSON.",
 						"Regenerate the full payload from scratch.",
 						"Before answering, ensure the JSON is complete, syntactically valid, and contains all closing brackets and quotes.",
 						"Return JSON only.",
@@ -1369,7 +1377,7 @@ async function generateQuizPacket(
 			},
 			{
 				apiKey,
-				reasoning,
+				reasoning: attemptReasoning,
 				maxTokens: 5000,
 				signal,
 			},
@@ -1403,8 +1411,17 @@ async function generateQuizPacket(
 				attempt,
 			);
 			if (signal.aborted) throw lastError;
-			if (attempt < QUIZ_GENERATION_MAX_ATTEMPTS && ctx.hasUI) {
-				ctx.ui.notify(`Quiz generation parse failed: ${parseError.message}; retrying once`, "info");
+			if (attempt < QUIZ_GENERATION_MAX_ATTEMPTS) {
+				if (isThinkingOnlyResponse(responseText, responsePartTypes) && attemptReasoning !== undefined) {
+					retryWithoutThinking = true;
+					if (ctx.hasUI) {
+						ctx.ui.notify("Quiz model returned thinking without final text; retrying with thinking off", "info");
+					}
+					continue;
+				}
+				if (ctx.hasUI) {
+					ctx.ui.notify(`Quiz generation parse failed: ${parseError.message}; retrying once`, "info");
+				}
 				continue;
 			}
 		}
