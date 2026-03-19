@@ -15,7 +15,7 @@ Instead of summarizing code for you, `pi-code-quiz` shows a real snippet, asks a
 - Uses pi's active model; thinking level defaults to the current setting, capped at `high`, but can be overridden
 - Keeps questions anchored to visible code snippets
 - Gives short feedback plus an ideal answer after you submit
-- Lets you open a per-question discussion thread
+- Lets you open a per-question discussion thread, using broader local source context and recent session context when available
 - Supports audience profiles: `general`, `scientist`, and `developer`
 
 ## Commands

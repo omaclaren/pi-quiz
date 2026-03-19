@@ -33,7 +33,8 @@
     ],
     "skills": [
       "./skills"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/omaclaren/pi-code-quiz/main/assets/screenshots/quiz-window.png"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

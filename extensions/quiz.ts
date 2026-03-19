@@ -168,6 +168,11 @@ const CODE_PREVIEW_BLOCK_LINES = 18;
 const CODE_PREVIEW_TAIL_LINES = 24;
 const CODE_PREVIEW_MAX_BLOCKS = 4;
 const SEGMENT_MERGE_GAP = 2;
+const DISCUSSION_SNIPPET_PADDING_LINES = 60;
+const DISCUSSION_SNIPPET_MAX_LINES = 140;
+const DISCUSSION_SESSION_CONTEXT_CHARS = 2_400;
+const DISCUSSION_SOURCE_CONTEXT_CHARS = 5_000;
+const DISCUSSION_MAX_SOURCE_CONTEXTS = 2;
 
 const LENS_VALUES = new Set<Lens>(["abstraction", "usage", "mechanism", "assumption", "change", "debugging"]);
 const DEPTH_VALUES = new Set<Depth>(["foundational", "intermediate", "subtle", "transfer"]);
@@ -857,6 +862,69 @@ function filePreview(absPath: string, repoRoot: string, maxLines = MAX_FILE_LINE
 	} catch {
 		return undefined;
 	}
+}
+
+function resolveRepoFilePath(repoRoot: string, path?: string): string | undefined {
+	if (!path) return undefined;
+	const candidates = [path, resolve(repoRoot, path)];
+	for (const candidate of candidates) {
+		if (!existsSync(candidate)) continue;
+		try {
+			if (statSync(candidate).isFile()) return candidate;
+		} catch {
+			// Ignore unreadable candidates.
+		}
+	}
+	return undefined;
+}
+
+function buildExpandedSnippetContext(absPath: string, repoRoot: string, snippet?: QuizCardSnippet): string | undefined {
+	if (!snippet?.startLine || !snippet?.endLine) return undefined;
+	try {
+		const raw = readFileSync(absPath, "utf8");
+		if (!isProbablyText(raw)) return undefined;
+		const lines = raw.split("\n");
+		const start = Math.max(1, snippet.startLine - DISCUSSION_SNIPPET_PADDING_LINES);
+		const end = Math.min(lines.length, snippet.endLine + DISCUSSION_SNIPPET_PADDING_LINES);
+		const content = renderLineSegments(lines, [{ start, end }], DISCUSSION_SNIPPET_MAX_LINES);
+		const relPath = displayPath(relative(repoRoot, absPath));
+		return `Expanded local source context (${relPath}, lines ${start}-${end}):\n${content}`;
+	} catch {
+		return undefined;
+	}
+}
+
+function relevantDiscussionSources(card: QuizCard, sources: SourceItem[]): SourceItem[] {
+	const ids = new Set<string>(card.sourceIds);
+	if (card.snippet?.sourceId) ids.add(card.snippet.sourceId);
+	return sources.filter((source) => ids.has(source.id));
+}
+
+function buildDiscussionSupportContext(
+	ctx: ExtensionCommandContext,
+	card: QuizCard,
+	sources: SourceItem[],
+	repoRoot: string,
+): string {
+	const sections: string[] = [];
+	const relevantSources = relevantDiscussionSources(card, sources);
+	const expandedContextPath =
+		resolveRepoFilePath(repoRoot, card.snippet?.path) || relevantSources.map((source) => resolveRepoFilePath(repoRoot, source.path)).find(Boolean);
+	const expandedSnippetContext = expandedContextPath ? buildExpandedSnippetContext(expandedContextPath, repoRoot, card.snippet) : undefined;
+	if (expandedSnippetContext) sections.push(expandedSnippetContext);
+
+	for (const source of relevantSources.slice(0, DISCUSSION_MAX_SOURCE_CONTEXTS)) {
+		sections.push(`Source context from quiz generation (${source.title}):\n${trimText(source.content, DISCUSSION_SOURCE_CONTEXT_CHARS)}`);
+	}
+
+	const recentConversation = buildRecentConversationText(ctx.sessionManager.getBranch() as SessionBranchEntry[]);
+	if (recentConversation) {
+		sections.push(
+			`Recent session context (may include earlier repo exploration):\n${trimText(recentConversation, DISCUSSION_SESSION_CONTEXT_CHARS)}`,
+		);
+	}
+
+	return sections.join("\n\n");
 }
 
 function findReadme(repoRoot: string): string | undefined {
@@ -1723,6 +1791,8 @@ async function discussQuizCard(
 	feedback: QuizAnswerFeedback | undefined,
 	audience: QuizAudience,
 	thread: QuizDiscussionMessage[],
+	sources: SourceItem[],
+	repoRoot: string,
 	thinkingOverride?: QuizRequestedThinkingLevel,
 	signal?: AbortSignal,
 ): Promise<string> {
@@ -1732,12 +1802,14 @@ async function discussQuizCard(
 	const snippetText = card.snippet?.code
 		? `Evidence snippet (${card.snippet.path || card.snippet.title || "snippet"}):\n${card.snippet.code}`
 		: "No snippet provided.";
+	const supportContext = buildDiscussionSupportContext(ctx, card, sources, repoRoot);
 	const contextPrompt = [
 		`Scope: ${packet.scope.label}`,
 		`Quiz summary: ${packet.sourceSummary}`,
 		`Audience: ${audienceLabel(audience)}`,
 		`Question: ${card.question}`,
 		snippetText,
+		supportContext ? `Additional local context:\n${supportContext}` : undefined,
 		answer ? `User's original answer: ${answer}` : "User revealed the answer without entering an answer first.",
 		feedback ? `Tutor feedback: ${feedback.feedback}` : undefined,
 		feedback?.gotRight?.length ? `What the user got right: ${feedback.gotRight.join("; ")}` : undefined,
@@ -2439,6 +2511,7 @@ async function runGlimpseQuizFlow(
 	ctx: ExtensionCommandContext,
 	scope: ResolvedScope,
 	sources: SourceItem[],
+	repoRoot: string,
 	audience: QuizAudience,
 	thinkingOverride?: QuizRequestedThinkingLevel,
 ): Promise<GlimpseQuizLaunchResult> {
@@ -2729,6 +2802,8 @@ async function runGlimpseQuizFlow(
 							state.feedback,
 							audience,
 							thread,
+							sources,
+							repoRoot,
 							thinkingOverride,
 							requestAbort.signal,
 						);
@@ -2880,7 +2955,7 @@ async function handleGlimpseQuizCommand(
 	if (activeQuizClose) activeQuizClose();
 
 	try {
-		const { packet, run, error: quizError } = await runGlimpseQuizFlow(pi, ctx, scope, sources, audience, thinkingLevel);
+		const { packet, run, error: quizError } = await runGlimpseQuizFlow(pi, ctx, scope, sources, repoRoot, audience, thinkingLevel);
 		if (quizError) {
 			ctx.ui.notify(quizError, quizError === "Quiz generation cancelled" ? "info" : "error");
 			return;
