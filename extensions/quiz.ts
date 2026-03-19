@@ -1506,7 +1506,7 @@ async function evaluateQuizAnswer(
 		`User answer: ${answer}`,
 	].filter(Boolean).join("\n\n");
 
-	const response = await completeSimple(
+	let response = await completeSimple(
 		ctx.model,
 		{
 			systemPrompt: ANSWER_FEEDBACK_SYSTEM_PROMPT,
@@ -1520,10 +1520,36 @@ async function evaluateQuizAnswer(
 		},
 	);
 
-	const responseText = response.content
+	let responsePartTypes = response.content
+		.map((part) => (typeof part?.type === "string" ? part.type : "unknown"))
+		.filter((type, index, array) => array.indexOf(type) === index);
+	let responseText = response.content
 		.filter((part): part is { type: "text"; text: string } => part.type === "text")
 		.map((part) => part.text)
 		.join("\n");
+	if (isThinkingOnlyResponse(responseText, responsePartTypes) && reasoning !== undefined) {
+		if (ctx.hasUI) ctx.ui.notify("Answer feedback model returned thinking without final text; retrying with thinking off", "info");
+		response = await completeSimple(
+			ctx.model,
+			{
+				systemPrompt: ANSWER_FEEDBACK_SYSTEM_PROMPT,
+				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+			},
+			{
+				apiKey,
+				reasoning: undefined,
+				maxTokens: 1200,
+				signal,
+			},
+		);
+		responsePartTypes = response.content
+			.map((part) => (typeof part?.type === "string" ? part.type : "unknown"))
+			.filter((type, index, array) => array.indexOf(type) === index);
+		responseText = response.content
+			.filter((part): part is { type: "text"; text: string } => part.type === "text")
+			.map((part) => part.text)
+			.join("\n");
+	}
 
 	const { data, repaired } = parseJsonPayloadText(responseText, "answer-feedback");
 	if (repaired && ctx.hasUI) {
@@ -1584,7 +1610,7 @@ async function discussQuizCard(
 		.join("\n\n");
 	const prompt = [contextPrompt, threadTranscript ? `Discussion so far:\n\n${threadTranscript}` : undefined].filter(Boolean).join("\n\n");
 
-	const response = await completeSimple(
+	let response = await completeSimple(
 		ctx.model,
 		{
 			systemPrompt: DISCUSSION_SYSTEM_PROMPT,
@@ -1598,11 +1624,38 @@ async function discussQuizCard(
 		},
 	);
 
-	const responseText = response.content
+	let responsePartTypes = response.content
+		.map((part) => (typeof part?.type === "string" ? part.type : "unknown"))
+		.filter((type, index, array) => array.indexOf(type) === index);
+	let responseText = response.content
 		.filter((part): part is { type: "text"; text: string } => part.type === "text")
 		.map((part) => part.text)
 		.join("\n")
 		.trim();
+	if (isThinkingOnlyResponse(responseText, responsePartTypes) && reasoning !== undefined) {
+		if (ctx.hasUI) ctx.ui.notify("Discussion model returned thinking without final text; retrying with thinking off", "info");
+		response = await completeSimple(
+			ctx.model,
+			{
+				systemPrompt: DISCUSSION_SYSTEM_PROMPT,
+				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+			},
+			{
+				apiKey,
+				reasoning: undefined,
+				maxTokens: 1400,
+				signal,
+			},
+		);
+		responsePartTypes = response.content
+			.map((part) => (typeof part?.type === "string" ? part.type : "unknown"))
+			.filter((type, index, array) => array.indexOf(type) === index);
+		responseText = response.content
+			.filter((part): part is { type: "text"; text: string } => part.type === "text")
+			.map((part) => part.text)
+			.join("\n")
+			.trim();
+	}
 
 	return safeString(responseText) || "I couldn't add much to that yet, but we can keep probing this question from another angle.";
 }
