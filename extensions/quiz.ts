@@ -284,7 +284,7 @@ const USAGE = [
 
 const QUIZ_THINKING_LEVELS: QuizThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const DEFAULT_QUIZ_AUDIENCE: QuizAudience = "general";
-const QUIZ_GENERATION_MAX_ATTEMPTS = 2;
+const QUIZ_GENERATION_MAX_ATTEMPTS = 3;
 const QUIZ_AUDIENCE_ALIASES: Record<string, QuizAudience> = {
 	general: "general",
 	gen: "general",
@@ -1447,18 +1447,20 @@ async function generateQuizPacket(
 	const basePrompt = buildQuizPrompt(scope, sources, audience, previousCards);
 	const reasoning = ctx.model.reasoning ? toReasoning(thinkingOverride ?? pi.getThinkingLevel()) : undefined;
 	let lastError: Error | undefined;
-	let retryWithoutThinking = false;
+	let retryMode: "normal" | "nudge-final-text" | "no-thinking" = "normal";
 
 	for (let attempt = 1; attempt <= QUIZ_GENERATION_MAX_ATTEMPTS; attempt++) {
-		const attemptReasoning = retryWithoutThinking ? undefined : reasoning;
+		const attemptReasoning = retryMode === "no-thinking" ? undefined : reasoning;
 		const prompt =
 			attempt === 1
 				? basePrompt
 				: [
 						basePrompt,
-						retryWithoutThinking
-							? "The previous attempt returned only thinking content and no final text response. Regenerate the full payload as plain JSON text."
-							: "The previous attempt returned malformed JSON.",
+						retryMode === "no-thinking"
+							? "The previous attempts did not produce a final assistant text response. Regenerate the full payload as plain JSON text with thinking off."
+							: retryMode === "nudge-final-text"
+								? "The previous attempt returned only reasoning / thinking content and no final assistant text message. You must now emit one final assistant text response containing only the complete JSON object."
+								: "The previous attempt returned malformed JSON.",
 						"Regenerate the full payload from scratch.",
 						"Before answering, ensure the JSON is complete, syntactically valid, and contains all closing brackets and quotes.",
 						"Return JSON only.",
@@ -1519,9 +1521,16 @@ async function generateQuizPacket(
 			if (signal.aborted) throw lastError;
 			if (attempt < QUIZ_GENERATION_MAX_ATTEMPTS) {
 				if (isThinkingOnlyResponse(responseText, responsePartTypes) && attemptReasoning !== undefined) {
-					retryWithoutThinking = true;
+					if (retryMode === "normal") {
+						retryMode = "nudge-final-text";
+						if (ctx.hasUI) {
+							ctx.ui.notify("Quiz model returned thinking without final text; retrying with a stronger final-text instruction", "info");
+						}
+						continue;
+					}
+					retryMode = "no-thinking";
 					if (ctx.hasUI) {
-						ctx.ui.notify("Quiz model returned thinking without final text; retrying with thinking off", "info");
+						ctx.ui.notify("Quiz model still returned no final text; retrying with thinking off", "info");
 					}
 					continue;
 				}
