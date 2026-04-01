@@ -1521,6 +1521,35 @@ function mergeQuizPackets(packets: QuizPacket[]): QuizPacket {
 	};
 }
 
+type QuizModelRequestAuth = {
+	apiKey?: string;
+	headers?: Record<string, string>;
+};
+
+async function resolveQuizModelRequestAuth(
+	ctx: ExtensionCommandContext,
+	model: NonNullable<ExtensionCommandContext["model"]>,
+): Promise<QuizModelRequestAuth> {
+	const modelRegistry = ctx.modelRegistry as {
+		getApiKeyAndHeaders?: (
+			model: NonNullable<ExtensionCommandContext["model"]>,
+		) => Promise<{ ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; error: string }>;
+		getApiKey?: (model: NonNullable<ExtensionCommandContext["model"]>) => Promise<string | undefined>;
+	};
+
+	if (typeof modelRegistry.getApiKeyAndHeaders === "function") {
+		const auth = await modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok) throw new Error(auth.error);
+		return { apiKey: auth.apiKey, headers: auth.headers };
+	}
+
+	if (typeof modelRegistry.getApiKey === "function") {
+		return { apiKey: await modelRegistry.getApiKey(model) };
+	}
+
+	throw new Error("Unsupported pi ModelRegistry API: expected getApiKeyAndHeaders() or getApiKey()");
+}
+
 async function generateQuizPacket(
 	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
@@ -1532,7 +1561,7 @@ async function generateQuizPacket(
 	previousCards: QuizCard[] = [],
 ): Promise<QuizPacket> {
 	if (!ctx.model) throw new Error("No active model selected");
-	const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+	const auth = await resolveQuizModelRequestAuth(ctx, ctx.model);
 	const basePrompt = buildQuizPrompt(scope, sources, audience, previousCards);
 	const effectiveThinkingLevel = resolveQuizThinkingLevel(pi, thinkingOverride);
 	const reasoning = ctx.model.reasoning ? toReasoning(effectiveThinkingLevel) : undefined;
@@ -1564,7 +1593,8 @@ async function generateQuizPacket(
 				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 			},
 			{
-				apiKey,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
 				reasoning: attemptReasoning,
 				maxTokens: 5000,
 				signal,
@@ -1704,7 +1734,7 @@ async function evaluateQuizAnswer(
 	signal?: AbortSignal,
 ): Promise<QuizAnswerFeedback> {
 	if (!ctx.model) throw new Error("No active model selected");
-	const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+	const auth = await resolveQuizModelRequestAuth(ctx, ctx.model);
 	const reasoning = ctx.model.reasoning ? toReasoning(thinkingOverride ?? "off") : undefined;
 	let useJsonSchema = shouldUseResponsesJsonSchema(ctx.model);
 	const snippetText = card.snippet?.code
@@ -1728,7 +1758,8 @@ async function evaluateQuizAnswer(
 			messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 		},
 		{
-			apiKey,
+			apiKey: auth.apiKey,
+			headers: auth.headers,
 			reasoning,
 			maxTokens: 1200,
 			signal,
@@ -1761,7 +1792,8 @@ async function evaluateQuizAnswer(
 				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 			},
 			{
-				apiKey,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
 				reasoning,
 				maxTokens: 1200,
 				signal,
@@ -1785,7 +1817,8 @@ async function evaluateQuizAnswer(
 				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 			},
 			{
-				apiKey,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
 				reasoning: undefined,
 				maxTokens: 1200,
 				signal,
@@ -1842,7 +1875,7 @@ async function discussQuizCard(
 	signal?: AbortSignal,
 ): Promise<string> {
 	if (!ctx.model) throw new Error("No active model selected");
-	const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
+	const auth = await resolveQuizModelRequestAuth(ctx, ctx.model);
 	const reasoning = ctx.model.reasoning ? toReasoning(thinkingOverride ?? "off") : undefined;
 	const snippetText = card.snippet?.code
 		? `Evidence snippet (${card.snippet.path || card.snippet.title || "snippet"}):\n${card.snippet.code}`
@@ -1879,7 +1912,8 @@ async function discussQuizCard(
 			messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 		},
 		{
-			apiKey,
+			apiKey: auth.apiKey,
+			headers: auth.headers,
 			reasoning,
 			maxTokens: 1400,
 			signal,
@@ -1903,7 +1937,8 @@ async function discussQuizCard(
 				messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
 			},
 			{
-				apiKey,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
 				reasoning: undefined,
 				maxTokens: 1400,
 				signal,
