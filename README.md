@@ -1,8 +1,8 @@
-# pi-code-quiz
+# pi-quiz
 
-Active code-reading quiz for [pi](https://github.com/badlogic/pi-mono).
+Active quiz for code and document understanding in [pi](https://github.com/badlogic/pi-mono).
 
-Instead of summarizing code for you, `pi-code-quiz` shows a real snippet, asks a question, lets you answer in your own words, gives feedback, and lets you discuss that question further.
+Instead of summarizing material for you, `pi-quiz` shows a real snippet, asks a question, lets you answer in your own words, gives feedback, and lets you discuss that question further.
 
 ## Screenshot
 
@@ -44,30 +44,37 @@ Instead of summarizing code for you, `pi-code-quiz` shows a real snippet, asks a
 From GitHub:
 
 ```bash
-pi install https://github.com/omaclaren/pi-code-quiz
+pi install https://github.com/omaclaren/pi-quiz
 ```
 
 From npm:
 
 ```bash
-pi install npm:pi-code-quiz
+pi install npm:pi-quiz
 ```
 
 Try it without installing:
 
 ```bash
-pi -e https://github.com/omaclaren/pi-code-quiz
+pi -e https://github.com/omaclaren/pi-quiz
 ```
 
 After installing, reload or restart pi.
 
 ## Notes
 
-- `pi-code-quiz` is for active recall and code understanding, not passive summaries.
+- `pi-quiz` is for active recall and understanding, not passive summaries.
 - Questions are intended to be answerable from the snippet shown in the quiz window.
 - After feedback is shown, you can open a short discussion thread for that card.
 - After a set is finished, you can generate more questions from the same scope.
 - Quiz packets and quiz runs are stored as hidden session entries.
+
+## Migrating from pi-code-quiz
+
+```bash
+pi remove npm:pi-code-quiz
+pi install npm:pi-quiz
+```
 
 ## License
 

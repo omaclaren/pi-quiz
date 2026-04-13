@@ -2697,7 +2697,7 @@ async function runGlimpseQuizFlow(
 			packet = sequencedPacket;
 			packets.push(sequencedPacket);
 			index = 0;
-			pi.appendEntry("code-quiz.packet", sequencedPacket);
+			pi.appendEntry("pi-quiz.packet", sequencedPacket);
 			resetQuestionState();
 		};
 		const rerender = () => {
@@ -3042,7 +3042,7 @@ async function handleGlimpseQuizCommand(
 		}
 		if (!packet || !run) return;
 
-		pi.appendEntry("code-quiz.run", run);
+		pi.appendEntry("pi-quiz.run", run);
 		const answered = run.answers.filter((answer) => !answer.skipped).length;
 		const skipped = run.answers.filter((answer) => answer.skipped).length;
 		const summary = run.quitEarly

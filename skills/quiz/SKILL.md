@@ -1,6 +1,6 @@
 ---
-name: code-quiz
-description: Scope-first active code-reading and code-understanding in quiz form. Use when the user wants to internalize code by answering probing questions about abstractions, usage, mechanisms, assumptions, or failure modes, rather than just receiving polished summaries. Good for session-, file-, and repo-level understanding. Avoid generic software-process trivia unless it is central to understanding.
+name: quiz
+description: Scope-first active quiz for code and document understanding. Use when the user wants to internalize code by answering probing questions about abstractions, usage, mechanisms, assumptions, or failure modes, rather than just receiving polished summaries. Good for session-, file-, and repo-level understanding. Avoid generic software-process trivia unless it is central to understanding.
 ---
 
 # Code Quiz

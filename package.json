@@ -1,17 +1,17 @@
 {
-  "name": "pi-code-quiz",
-  "version": "0.1.4",
-  "description": "Active code-reading quiz for pi",
+  "name": "pi-quiz",
+  "version": "0.4.0",
+  "description": "Active quiz for code and document understanding in pi",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/omaclaren/pi-code-quiz.git"
+    "url": "git+https://github.com/omaclaren/pi-quiz.git"
   },
   "bugs": {
-    "url": "https://github.com/omaclaren/pi-code-quiz/issues"
+    "url": "https://github.com/omaclaren/pi-quiz/issues"
   },
-  "homepage": "https://github.com/omaclaren/pi-code-quiz#readme",
+  "homepage": "https://github.com/omaclaren/pi-quiz#readme",
   "keywords": [
     "pi-package",
     "pi",
@@ -34,7 +34,7 @@
     "skills": [
       "./skills"
     ],
-    "image": "https://raw.githubusercontent.com/omaclaren/pi-code-quiz/main/assets/screenshots/quiz-window.png"
+    "image": "https://raw.githubusercontent.com/omaclaren/pi-quiz/main/assets/screenshots/quiz-window.png"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
