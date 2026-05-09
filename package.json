@@ -1,6 +1,6 @@
 {
   "name": "pi-quiz",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Active quiz for code and document understanding in pi",
   "type": "module",
   "license": "MIT",
@@ -37,16 +37,16 @@
     "image": "https://raw.githubusercontent.com/omaclaren/pi-quiz/main/assets/screenshots/quiz-window.png"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "^0.64.0",
-    "@mariozechner/pi-coding-agent": "^0.64.0",
-    "@mariozechner/pi-tui": "^0.64.0",
     "@types/node": "^24.3.0",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-tui": "^0.74.0",
+    "@earendil-works/pi-ai": "^0.74.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -1,5 +1,5 @@
-import { completeSimple, type ThinkingLevel } from "@mariozechner/pi-ai";
-import { type ExtensionAPI, type ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import { completeSimple, type ThinkingLevel } from "@earendil-works/pi-ai";
+import { type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import hljs from "highlight.js";
 import { jsonrepair } from "jsonrepair";
 import { execSync } from "node:child_process";
